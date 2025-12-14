@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a full-stack TypeScript monorepo starter built with Bun, Hono, Vite, and React. The project uses Turbo for build orchestration and follows a workspace-based structure with three main packages: client, server, and shared.
 
+The project is configured for **single origin deployment** where both the API and React frontend are served from the same origin (port 3000) in production, eliminating CORS complexity.
+
 ## Architecture
 
 ### Monorepo Structure
@@ -44,6 +46,25 @@ Client also uses `@/` → `./client/src/` for local imports (configured in vite.
 - **Framework**: Hono with CORS middleware
 - **Runtime**: Bun (not Node.js)
 - **Export Pattern**: Exports both `app` and `default` from index.ts
+- **Single Origin Setup**:
+  - API routes are prefixed with `/api` (e.g., `/api/hello`)
+  - Uses `serveStatic` from `hono/bun` to serve React build files from `./static`
+  - Catchall route serves `index.html` for client-side routing
+  - Runs on port 3000 in production serving both API and frontend
+
+### Development vs Production
+
+**Development Mode:**
+- Client runs on Vite dev server (port 5173)
+- Server runs on Bun (port 3000)
+- Vite proxy redirects `/api/*` requests to `http://localhost:3000`
+- Hot reload works for both frontend and backend
+
+**Production Mode (Single Origin):**
+- Everything runs on port 3000
+- Hono serves both API routes (`/api/*`) and static React files
+- No CORS issues, no separate origins
+- Built client files are copied to `server/static/` directory
 
 ## Development Commands
 
@@ -64,6 +85,11 @@ bun run build
 # Build individual workspaces
 bun run build:client
 bun run build:server
+
+# Single origin production build
+bun run build:single  # Builds all workspaces and copies client to server/static
+bun run copy:static   # Copy client/dist to server/static
+bun run start:single  # Start the single origin production server
 
 # Type checking
 bun run type-check    # All workspaces
@@ -101,7 +127,8 @@ When adding new Hono routes:
 2. Export them in `shared/src/index.ts`
 3. Build shared package (or let dev mode rebuild)
 4. Import types in server: `import type { YourType } from 'shared/dist'`
-5. Use in route handlers with proper TypeScript typing
+5. **IMPORTANT**: All API routes MUST be prefixed with `/api` (e.g., `.get("/api/users")`)
+6. Use in route handlers with proper TypeScript typing
 
 ### Client Development
 
@@ -110,6 +137,11 @@ When adding new routes:
 2. TanStack Router plugin auto-generates routeTree.gen.ts
 3. Import shared types: `import type { YourType } from 'shared'`
 4. Use TanStack Query for data fetching
+
+When making API calls:
+- Use Hono RPC client: `hcWithType("/api")` (already configured in routes/index.tsx)
+- The `/api` base path works in both development (via Vite proxy) and production (single origin)
+- All API endpoints are accessed via the RPC client methods (e.g., `client.hello.$get()`)
 
 ### Shared Package Updates
 
@@ -123,8 +155,36 @@ After modifying shared/src/types:
 - Server env vars are accessed normally via `process.env`
 - Both are tracked in turbo.json for cache invalidation
 
-## Deployment Notes
+## Deployment
 
-- **Client**: Static build outputs to `client/dist/` - deploy to any static host
-- **Server**: Hono app can deploy to Cloudflare Workers, Bun, or Node.js adapters
-- **Type Safety**: Shared types ensure client/server contract remains in sync
+### Single Origin Deployment (Recommended)
+
+This project is configured for single origin deployment using Docker:
+
+```bash
+# Build and run with Docker Compose
+docker-compose up -d
+
+# Or build and run manually
+docker build -t bhvr-app .
+docker run -p 3000:3000 bhvr-app
+```
+
+The Dockerfile:
+- Uses `oven/bun:latest` as base image
+- Installs all dependencies
+- Runs `bun run build:single` to build and prepare static files
+- Exposes port 3000
+- Starts the server with `bun run start:single`
+
+### Alternative Deployment Options
+
+- **VPS/Bare Metal**: Run `bun run build:single && bun run start:single`
+- **Cloudflare Workers**: Deploy Hono app separately (requires separate client deployment)
+- **Static Client + Serverless API**: Build client and server separately, deploy to different hosts
+
+### Environment Variables
+
+- `PORT`: Server port (default: 3000)
+- `NODE_ENV`: Set to `production` for production builds
+- Client env vars must be prefixed with `VITE_` and set at build time
